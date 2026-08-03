@@ -1,21 +1,20 @@
-"""Train a customer-churn model and track the run in MLflow with DVC lineage."""
+"""Train a customer churn model and track the run with MLflow and DVC."""
 
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import subprocess
 import time
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
 import mlflow
-import mlflow.data
 import mlflow.sklearn
-import pandas as pd
 import yaml
-from mlflow.models import infer_signature
 from sklearn.model_selection import train_test_split
 
 from training_utils import (
@@ -29,14 +28,21 @@ from training_utils import (
 
 
 def optional_int(value: str) -> int | None:
+    """Convert a command-line value to an integer or None."""
     if value.lower() in {"none", "null"}:
         return None
     return int(value)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Track churn training with DVC and MLflow")
-    parser.add_argument("--data-path", type=Path, default=Path("data/customer_churn.csv"))
+    parser = argparse.ArgumentParser(
+        description="Train a churn model and track it with MLflow"
+    )
+    parser.add_argument(
+        "--data-path",
+        type=Path,
+        default=Path("data/customer_churn.csv"),
+    )
     parser.add_argument(
         "--model-type",
         choices=["logistic_regression", "random_forest"],
@@ -55,6 +61,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_git_command(*arguments: str) -> str | None:
+    """Run a Git command and return its output when available."""
     try:
         result = subprocess.run(
             ["git", *arguments],
@@ -68,23 +75,29 @@ def run_git_command(*arguments: str) -> str | None:
 
 
 def read_dvc_hash(data_path: Path) -> tuple[str, Path | None]:
+    """Read the dataset hash from the matching .dvc file."""
     dvc_file = Path(f"{data_path}.dvc")
+
     if not dvc_file.exists():
         return "not-tracked-by-dvc", None
 
     metadata = yaml.safe_load(dvc_file.read_text(encoding="utf-8")) or {}
     outputs = metadata.get("outs", [])
+
     if not outputs:
         return "unknown", dvc_file
 
     first_output: dict[str, Any] = outputs[0]
-    for key in ("md5", "etag", "checksum", "hash"):
+
+    for key in ("md5", "etag", "checksum"):
         if first_output.get(key):
             return str(first_output[key]), dvc_file
+
     return "unknown", dvc_file
 
 
 def configure_mlflow(args: argparse.Namespace) -> tuple[str, str]:
+    """Configure the MLflow tracking server and experiment."""
     tracking_uri = (
         args.tracking_uri
         or os.getenv("MLFLOW_TRACKING_URI")
@@ -98,7 +111,14 @@ def configure_mlflow(args: argparse.Namespace) -> tuple[str, str]:
 
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
+
     return tracking_uri, experiment_name
+
+
+def end_run_silently(status: str) -> None:
+    """End an MLflow run without printing MLflow's automatic URL messages."""
+    with redirect_stdout(io.StringIO()):
+        mlflow.end_run(status=status)
 
 
 def main() -> None:
@@ -107,6 +127,7 @@ def main() -> None:
 
     data, features, target = load_dataset(args.data_path)
     dvc_hash, dvc_file = read_dvc_hash(args.data_path)
+
     git_commit = run_git_command("rev-parse", "HEAD") or "uncommitted"
     git_status = run_git_command("status", "--porcelain")
     git_dirty = bool(git_status)
@@ -119,7 +140,7 @@ def main() -> None:
         stratify=target,
     )
 
-    model_parameters: dict[str, Any] = {
+    parameters: dict[str, Any] = {
         "model_type": args.model_type,
         "test_size": args.test_size,
         "random_state": args.random_state,
@@ -128,39 +149,34 @@ def main() -> None:
         "train_rows": len(x_train),
         "test_rows": len(x_test),
     }
+
     if args.model_type == "random_forest":
-        model_parameters.update(
+        parameters.update(
             {
                 "n_estimators": args.n_estimators,
-                "max_depth": args.max_depth if args.max_depth is not None else "None",
+                "max_depth": (
+                    args.max_depth if args.max_depth is not None else "None"
+                ),
                 "min_samples_split": args.min_samples_split,
             }
         )
     else:
-        model_parameters["C"] = args.c
+        parameters["C"] = args.c
 
-    run_name = args.run_name or f"{args.model_type}-dvc-{dvc_hash[:8]}"
+    run_name = args.run_name or f"{args.model_type}-{dvc_hash[:8]}"
+    run = mlflow.start_run(run_name=run_name)
 
-    with mlflow.start_run(run_name=run_name) as run:
+    try:
         mlflow.set_tags(
             {
                 "project": "customer-churn",
-                "course_section": "DVC + MLflow experiment tracking",
-                "dataset.dvc_hash": dvc_hash,
                 "dataset.path": str(args.data_path),
+                "dataset.dvc_hash": dvc_hash,
                 "git.commit": git_commit,
                 "git.dirty": str(git_dirty).lower(),
             }
         )
-        mlflow.log_params(model_parameters)
-
-        dataset = mlflow.data.from_pandas(
-            data,
-            source=str(args.data_path),
-            name=f"customer-churn-{dvc_hash[:8]}",
-            targets="churn",
-        )
-        mlflow.log_input(dataset, context="training")
+        mlflow.log_params(parameters)
 
         pipeline = build_pipeline(
             args.model_type,
@@ -178,6 +194,7 @@ def main() -> None:
 
         predictions = pipeline.predict(x_test)
         probabilities = pipeline.predict_proba(x_test)[:, 1]
+
         metrics = calculate_metrics(y_test, predictions, probabilities)
         metrics["training_seconds"] = float(training_seconds)
         mlflow.log_metrics(metrics)
@@ -198,29 +215,40 @@ def main() -> None:
 
         if dvc_file is not None:
             mlflow.log_artifact(str(dvc_file), artifact_path="dataset_version")
+
         if Path("requirements.txt").exists():
             mlflow.log_artifact("requirements.txt", artifact_path="environment")
+
         if Path("params.yaml").exists():
             mlflow.log_artifact("params.yaml", artifact_path="configuration")
 
-        signature = infer_signature(x_test, predictions)
         model_info = mlflow.sklearn.log_model(
-            pipeline,
+            sk_model=pipeline,
             name="model",
-            signature=signature,
-            input_example=x_test.head(5),
+            serialization_format="skops",
+            skops_trusted_types=["numpy.dtype"],
         )
 
-        print("\nMLflow run completed successfully")
-        print(f"Tracking URI: {tracking_uri}")
-        print(f"Experiment: {experiment_name}")
-        print(f"Run name: {run_name}")
-        print(f"Run ID: {run.info.run_id}")
-        print(f"DVC dataset hash: {dvc_hash}")
-        print(f"Logged model URI: {model_info.model_uri}")
-        print("Metrics:")
-        for name, value in metrics.items():
-            print(f"  {name}: {value:.4f}")
+        run_id = run.info.run_id
+        model_uri = model_info.model_uri
+        end_run_silently("FINISHED")
+
+    except Exception:
+        end_run_silently("FAILED")
+        raise
+
+    print()
+    print("MLflow run completed successfully")
+    print(f"Tracking URI: {tracking_uri}")
+    print(f"Experiment: {experiment_name}")
+    print(f"Run name: {run_name}")
+    print(f"Run ID: {run_id}")
+    print(f"DVC dataset hash: {dvc_hash}")
+    print(f"Logged model URI: {model_uri}")
+    print("Metrics:")
+
+    for metric_name, metric_value in metrics.items():
+        print(f"  {metric_name}: {metric_value:.4f}")
 
 
 if __name__ == "__main__":
