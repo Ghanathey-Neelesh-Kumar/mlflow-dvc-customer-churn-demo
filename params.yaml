@@ -1,0 +1,14 @@
+data:
+  rows: 2000
+  seed: 42
+
+training:
+  test_size: 0.20
+  random_state: 42
+
+model:
+  type: random_forest
+  n_estimators: 200
+  max_depth: 8
+  min_samples_split: 4
+  c: 1.0

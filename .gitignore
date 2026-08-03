@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+outputs/
+mlruns/
+.DS_Store
+.vscode/
+.idea/
+.dvc/config.local
