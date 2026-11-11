@@ -1,4 +1,4 @@
 [core]
     remote = storage
 ['remote "storage"']
-    url = s3://dvc-demo-telco-churn-bucket/customer-churn-data
+    url = s3://<YOUR_DVC_BUCKET>/customer-churn-data
