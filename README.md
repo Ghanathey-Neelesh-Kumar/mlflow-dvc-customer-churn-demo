@@ -70,7 +70,7 @@ The starter dataset is kept separately so students can create `data/customer_chu
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/<YOUR_GITHUB_USERNAME>/mlflow-dvc-customer-churn-demo.git
+git clone https://github.com/Ghanathey-Neelesh-Kumar/mlflow-dvc-customer-churn-demo.git
 cd mlflow-dvc-customer-churn-demo
 ```
 
@@ -149,10 +149,11 @@ This prints metrics and saves the model and metrics locally under `outputs/`. It
 
 ## 5. Initialise DVC and track the dataset
 
-The repository is already tracked by Git after cloning, so initialise DVC:
+DVC is already initialised in this repository. The `.dvc/` directory and shared configuration are committed to Git, so **do not run `dvc init` again**. You can verify the DVC setup with:
 
 ```bash
-dvc init
+dvc version
+dvc status
 ```
 
 Track the working dataset:
@@ -179,9 +180,17 @@ git commit -m "Track customer churn dataset version 1 with DVC"
 
 Use a separate bucket or prefix from the MLflow artifact store.
 
+This repository already defines a default remote named `storage`. It points to a placeholder bucket so that students do not accidentally use the instructor's storage. Replace the URL with a bucket you own:
+
 ```bash
-dvc remote add -d storage s3://<DVC_BUCKET_NAME>/dvc-data
+dvc remote modify storage url s3://<YOUR_DVC_BUCKET>/customer-churn-data
 dvc remote modify storage region <AWS_REGION>
+```
+
+Then verify the configuration:
+
+```bash
+dvc remote list
 ```
 
 Verify the active AWS identity:
